@@ -1,8 +1,16 @@
+# frozen_string_literal: true
+
 require 'arel/visitors/to_sql'
 
 module Arel
   module Visitors
     class Clickhouse < ::Arel::Visitors::ToSql
+
+      SETTING_KEY_NON_WORD_CHARS = /\W+/
+      CH_TYPE_ENUM_PREFIX = /\AEnum\d?\b/i
+      CH_TYPE_SUPPORTS_EMPTY = /\A(String|FixedString|Array|Map|UUID|Tuple|IPv[46])/i
+      CH_TYPE_NULLABLE_WRAPPER = /\ANullable\((.+)\)\z/m
+      CH_TYPE_LOW_CARDINALITY_WRAPPER = /\ALowCardinality\((.+)\)\z/m
 
       def compile(node, collector = Arel::Collectors::SQLString.new)
         @delete_or_update = false
@@ -73,7 +81,7 @@ module Arel
         collector << "SETTINGS "
         o.expr.each_with_index do |(key, value), i|
           collector << ", " if i > 0
-          collector << key.to_s.gsub(/\W+/, "")
+          collector << key.to_s.gsub(SETTING_KEY_NON_WORD_CHARS, "")
           collector << " = "
           collector << sanitize_as_setting_value(value)
         end
@@ -109,6 +117,28 @@ module Arel
         end
       end
 
+      def visit_Arel_Nodes_Equality(o, collector)
+        if rewrite_nil_to_empty_predicate?(o)
+          collector << 'empty('
+          visit o.left, collector
+          collector << ')'
+          return collector
+        end
+
+        super
+      end
+
+      def visit_Arel_Nodes_NotEqual(o, collector)
+        if rewrite_nil_to_empty_predicate?(o)
+          collector << 'notEmpty('
+          visit o.left, collector
+          collector << ')'
+          return collector
+        end
+
+        super
+      end
+
       def sanitize_as_setting_value(value)
         if value == :default
           'DEFAULT'
@@ -123,6 +153,78 @@ module Arel
       end
 
       private
+
+      def rewrite_nil_to_empty_predicate?(o)
+        return false if unboundable?(o.right)
+        return false unless o.left.is_a?(Arel::Attributes::Attribute)
+        return false unless nil_comparison_operand?(o.right)
+
+        column = column_for_arel_attribute(o.left)
+        return false unless column
+        return false if column.null
+        return false unless clickhouse_sql_type_supports_empty?(column.sql_type)
+
+        true
+      end
+
+      def nil_comparison_operand?(right)
+        return true if right.nil?
+
+        if defined?(ActiveModel::Attribute) && right.is_a?(ActiveModel::Attribute)
+          return right.value.nil?
+        end
+
+        if right.is_a?(Arel::Nodes::Casted)
+          return right.value.nil?
+        end
+
+        false
+      end
+
+      def column_for_arel_attribute(attr)
+        table_name = resolve_arel_table_name(attr.relation)
+        return nil unless table_name
+
+        cols = @connection.schema_cache.columns(table_name)
+        cols.find { |c| c.name == attr.name.to_s }
+      rescue StandardError
+        nil
+      end
+
+      def resolve_arel_table_name(relation)
+        rel = relation
+        while rel.is_a?(Arel::Nodes::TableAlias)
+          rel = rel.relation
+        end
+
+        return nil unless rel.respond_to?(:name)
+
+        rel.name.to_s
+      end
+
+      def clickhouse_sql_type_supports_empty?(sql_type)
+        bare = strip_clickhouse_type_wrappers(sql_type)
+        return false if bare.match?(CH_TYPE_ENUM_PREFIX)
+
+        bare.match?(CH_TYPE_SUPPORTS_EMPTY)
+      end
+
+      def strip_clickhouse_type_wrappers(sql_type)
+        s = sql_type.to_s.strip
+
+        loop do
+          case s
+          when CH_TYPE_NULLABLE_WRAPPER
+            s = Regexp.last_match(1)
+          when CH_TYPE_LOW_CARDINALITY_WRAPPER
+            s = Regexp.last_match(1)
+          else
+            break
+          end
+        end
+
+        s
+      end
 
       # Utilized by GroupingSet, Cube & RollUp visitors to
       # handle grouping aggregation semantics

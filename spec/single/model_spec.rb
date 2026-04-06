@@ -510,4 +510,42 @@ RSpec.describe 'Model', :migrations do
       end
     end
   end
+
+  context 'nil to empty SQL mapping' do
+    class NilEmptyTestModel < ActiveRecord::Base
+      self.table_name = 'nil_empty_test'
+    end
+
+    before do
+      @nil_empty_base_cfg = ActiveRecord::Base.connection_db_config.configuration_hash
+      migrations_dir = File.join(FIXTURES_PATH, 'migrations', 'nil_to_empty_mapping')
+      quietly { ActiveRecord::MigrationContext.new(migrations_dir).up }
+    end
+
+    after do
+      ActiveRecord::Base.establish_connection(@nil_empty_base_cfg)
+      NilEmptyTestModel.reset_column_information
+    end
+
+    it 'rewrites where(column: nil) to empty() for non-nullable String' do
+      sql = NilEmptyTestModel.where(body: nil).to_sql
+      expect(sql).to include('empty(')
+      expect(sql).to include('nil_empty_test')
+    end
+
+    it 'rewrites where.not(column: nil) to notEmpty()' do
+      sql = NilEmptyTestModel.where.not(body: nil).to_sql
+      expect(sql).to include('notEmpty(')
+    end
+
+    it 'does not rewrite Nullable columns' do
+      sql = NilEmptyTestModel.where(optional: nil).to_sql
+      expect(sql).not_to include('empty(')
+    end
+
+    it 'does not rewrite integer columns for nil' do
+      sql = NilEmptyTestModel.where(counter: nil).to_sql
+      expect(sql).not_to include('empty(')
+    end
+  end
 end
