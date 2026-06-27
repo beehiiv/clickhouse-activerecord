@@ -562,8 +562,13 @@ module ActiveRecord
 
       protected
 
+      # ClickHouse has no auto-increment / last-insert-id, and exec_insert
+      # returns a bare truthy value, not a result row. Returning that here makes
+      # Rails 8 write it back into the primary key after insert (via
+      # returning_column_values -> _create_record), crashing on deserialize
+      # (e.g. true.to_i / true.strftime). Nothing is fetched from an insert.
       def last_inserted_id(result)
-        result
+        nil
       end
 
       def change_column_for_alter(table_name, column_name, type, **options)
