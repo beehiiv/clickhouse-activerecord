@@ -178,6 +178,15 @@ module ActiveRecord
         true
       end
 
+      # ClickHouse is accessed over stateless HTTP, not a pooled connection that
+      # can run a query on a separate thread. Rails 8 routes async queries
+      # (load_async / FutureResult) through raw_execute/perform_query, which this
+      # adapter does not implement; disabling concurrent connections makes
+      # async_enabled? false so those queries run synchronously via the normal path.
+      def supports_concurrent_connections?
+        false
+      end
+
       def disconnect!
         @connection.finish
         super
@@ -528,6 +537,16 @@ module ActiveRecord
         end
       end
 
+      # ClickHouse cannot return values from an INSERT: it has no RETURNING
+      # clause and no auto-increment columns. The AbstractAdapter default
+      # (`column.auto_populated?`) is true for any column with a DEFAULT
+      # expression (e.g. PeerDB's `_peerdb_synced_at DateTime64 DEFAULT now64()`),
+      # which on Rails 8 makes _create_record write the bogus exec_insert result
+      # back into that attribute. Nothing is ever fetched after an insert here.
+      def return_value_after_insert?(_column) # :nodoc:
+        false
+      end
+
       def supports_insert_on_duplicate_skip?
         true
       end
@@ -543,8 +562,13 @@ module ActiveRecord
 
       protected
 
+      # ClickHouse has no auto-increment / last-insert-id, and exec_insert
+      # returns a bare truthy value, not a result row. Returning that here makes
+      # Rails 8 write it back into the primary key after insert (via
+      # returning_column_values -> _create_record), crashing on deserialize
+      # (e.g. true.to_i / true.strftime). Nothing is fetched from an insert.
       def last_inserted_id(result)
-        result
+        nil
       end
 
       def change_column_for_alter(table_name, column_name, type, **options)
