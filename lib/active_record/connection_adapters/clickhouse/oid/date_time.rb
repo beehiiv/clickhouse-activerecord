@@ -9,6 +9,10 @@ module ActiveRecord
           def serialize(value)
             value = super
             return unless value
+            # Rails 8 routes raw query values (e.g. integer epochs from defaults)
+            # through #serialize; only Time-like values can be strftime'd, pass
+            # anything else (Integer, etc.) through for ClickHouse to interpret.
+            return value unless value.respond_to?(:strftime)
 
             value.strftime('%Y-%m-%d %H:%M:%S' + (@precision.present? && @precision > 0 ? ".%#{@precision}N" : ''))
           end

@@ -10,6 +10,19 @@ module ActiveRecord
 
         DB_EXCEPTION_REGEXP = /\ACode:\s+\d+\.\s+DB::Exception:/.freeze
 
+        # Rails 8 calls #write_query? from #preprocess_query for every statement;
+        # the AbstractAdapter default raises NotImplementedError. Classify reads
+        # the same way the built-in adapters do (SELECT/WITH/SHOW/DESCRIBE/etc.).
+        READ_QUERY = ActiveRecord::ConnectionAdapters::AbstractAdapter.build_read_query_regexp(
+          :describe, :exists, :show
+        ).freeze
+
+        def write_query?(sql)
+          !READ_QUERY.match?(sql)
+        rescue ArgumentError # Invalid encoding
+          !READ_QUERY.match?(sql.b)
+        end
+
         def execute(sql, name = nil, settings: {})
           do_execute(sql, name, settings: settings)
         end
