@@ -178,6 +178,15 @@ module ActiveRecord
         true
       end
 
+      # ClickHouse is accessed over stateless HTTP, not a pooled connection that
+      # can run a query on a separate thread. Rails 8 routes async queries
+      # (load_async / FutureResult) through raw_execute/perform_query, which this
+      # adapter does not implement; disabling concurrent connections makes
+      # async_enabled? false so those queries run synchronously via the normal path.
+      def supports_concurrent_connections?
+        false
+      end
+
       def disconnect!
         @connection.finish
         super
