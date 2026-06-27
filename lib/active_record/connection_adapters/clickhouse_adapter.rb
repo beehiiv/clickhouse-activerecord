@@ -528,6 +528,16 @@ module ActiveRecord
         end
       end
 
+      # ClickHouse cannot return values from an INSERT: it has no RETURNING
+      # clause and no auto-increment columns. The AbstractAdapter default
+      # (`column.auto_populated?`) is true for any column with a DEFAULT
+      # expression (e.g. PeerDB's `_peerdb_synced_at DateTime64 DEFAULT now64()`),
+      # which on Rails 8 makes _create_record write the bogus exec_insert result
+      # back into that attribute. Nothing is ever fetched after an insert here.
+      def return_value_after_insert?(_column) # :nodoc:
+        false
+      end
+
       def supports_insert_on_duplicate_skip?
         true
       end
