@@ -660,6 +660,335 @@ RSpec.describe 'Model', :migrations do
         expect(record.map_array_datetime['c'][0]).to eq(DateTime.parse('2022-12-05 15:22:49'))
         expect(record.map_array_datetime['c'][1]).to eq(DateTime.parse('2024-01-01 12:00:08'))
       end
+
+      it 'handles already deserialized DateTime/Time map values without re-parsing' do
+        now = Time.now
+        instance = model.instantiate({
+          'id' => '1',
+          'map_datetime' => {'t1' => now, 't2' => DateTime.now},
+          'map_date' => {'d' => Date.current},
+          'map_string' => {'x' => 'test'},
+          'map_int' => {'n' => 1},
+          'map_array_datetime' => {'a' => []},
+          'map_array_string' => {'a' => []},
+          'map_array_int' => {'a' => []},
+          'date' => Date.today
+        })
+
+        expect { instance.map_datetime }.to_not raise_error
+        expect(instance.map_datetime['t1']).to be_a(Time).or be_a(DateTime)
+        expect(instance.map_datetime['t2']).to be_a DateTime
+
+        expect { instance.map_date }.to_not raise_error
+        expect(instance.map_date['d']).to be_a Date
+      end
+    end
+
+    describe 'TimeZoneConverter compatibility' do
+      it 'does not crash when time_zone_aware_attributes is enabled' do
+        Time.use_zone('UTC') do
+          ActiveRecord::Base.time_zone_aware_attributes = true
+          model.reset_column_information
+
+          begin
+            model.create!(
+              map_datetime: {a: Time.now},
+              map_string: {a: 'test'},
+              map_int: {a: 1},
+              map_array_datetime: {a: []},
+              map_array_string: {a: []},
+              map_array_int: {a: []},
+              date: Date.today
+            )
+
+            expect { model.first.map_datetime }.to_not raise_error
+            expect(model.first.map_datetime['a']).to be_a DateTime
+          ensure
+            ActiveRecord::Base.time_zone_aware_attributes = false
+            model.reset_column_information
+          end
+        end
+      end
+    end
+  end
+
+  context 'map with float and bool' do
+    let!(:model) do
+      Class.new(ActiveRecord::Base) do
+        self.table_name = 'map_test'
+      end
+    end
+
+    before do
+      migrations_dir = File.join(FIXTURES_PATH, 'migrations', 'add_map_float_bool')
+      quietly { ActiveRecord::MigrationContext.new(migrations_dir).up }
+    end
+
+    describe 'Float subtype support' do
+      it 'creates and retrieves Float32 map values' do
+        model.create!(
+          map_float32: {a: 1.5, b: 2.7, c: 3.14},
+          map_float64: {x: 1.0, y: 2.0},
+          map_bool: {flag: true},
+          date: date
+        )
+
+        record = model.first
+        expect(record.map_float32).to be_a Hash
+        expect(record.map_float32['a']).to eq(1.5)
+        expect(record.map_float32['b']).to eq(2.7)
+        expect(record.map_float32['c']).to eq(3.14)
+      end
+
+      it 'creates and retrieves Float64 map values' do
+        model.create!(
+          map_float32: {a: 1.0},
+          map_float64: {x: 123.456789, y: 987.654321},
+          map_bool: {flag: false},
+          date: date
+        )
+
+        record = model.first
+        expect(record.map_float64).to be_a Hash
+        expect(record.map_float64['x']).to eq(123.456789)
+        expect(record.map_float64['y']).to eq(987.654321)
+      end
+
+      it 'insert with insert_all' do
+        model.insert_all([{
+          map_float32: {a: 4.5},
+          map_float64: {x: 5.5},
+          map_bool: {flag: true},
+          date: date
+        }])
+
+        record = model.first
+        expect(record.map_float32['a']).to eq(4.5)
+        expect(record.map_float64['x']).to eq(5.5)
+      end
+
+      it 'retrieves float values without quoting in SQL' do
+        model.connection.insert("INSERT INTO #{model.table_name} (id, map_float32, map_float64, map_bool, date) VALUES (1, {'price': 99.99}, {'rate': 0.075}, {'active': true}, '2022-12-06')")
+
+        record = model.first
+        expect(record.map_float32['price']).to eq(99.99)
+        expect(record.map_float64['rate']).to eq(0.075)
+      end
+    end
+
+    describe 'Bool subtype support' do
+      it 'creates and retrieves Bool map values' do
+        model.create!(
+          map_float32: {a: 1.0},
+          map_float64: {x: 1.0},
+          map_bool: {enabled: true, active: false, verified: true},
+          date: date
+        )
+
+        record = model.first
+        expect(record.map_bool).to be_a Hash
+        expect(record.map_bool['enabled']).to eq(true)
+        expect(record.map_bool['active']).to eq(false)
+        expect(record.map_bool['verified']).to eq(true)
+      end
+
+      it 'handles boolean type casting' do
+        model.create!(
+          map_float32: {a: 1.0},
+          map_float64: {x: 1.0},
+          map_bool: {flag1: 1, flag2: 0, flag3: 'true', flag4: 'false'},
+          date: date
+        )
+
+        record = model.first
+        expect(record.map_bool['flag1']).to eq(true)
+        expect(record.map_bool['flag2']).to eq(false)
+        expect(record.map_bool['flag3']).to eq(true)
+        expect(record.map_bool['flag4']).to eq(false)
+      end
+
+      it 'retrieves bool values without quoting in SQL' do
+        model.connection.insert("INSERT INTO #{model.table_name} (id, map_float32, map_float64, map_bool, date) VALUES (1, {'a': 1.0}, {'x': 1.0}, {'is_active': true, 'is_deleted': false}, '2022-12-06')")
+
+        record = model.first
+        expect(record.map_bool['is_active']).to eq(true)
+        expect(record.map_bool['is_deleted']).to eq(false)
+      end
+    end
+
+    describe 'deserialize' do
+      it 'deserializes string float values from map_float32 type' do
+        type = model.type_for_attribute('map_float32')
+        expect(type.deserialize({'price' => '1.5', 'tax' => '0.25'})).to eq({'price' => 1.5, 'tax' => 0.25})
+      end
+
+      it 'deserializes string float values from map_float64 type' do
+        type = model.type_for_attribute('map_float64')
+        expect(type.deserialize({'rate' => '123.456789'})).to eq({'rate' => 123.456789})
+      end
+
+      it 'deserializes string bool values from map_bool type' do
+        type = model.type_for_attribute('map_bool')
+        expect(type.deserialize({'a' => 'true', 'b' => 'false', 'c' => '1', 'd' => '0'})).to eq({'a' => true, 'b' => false, 'c' => true, 'd' => false})
+      end
+
+      it 'deserializes integer bool values from map_bool type' do
+        type = model.type_for_attribute('map_bool')
+        expect(type.deserialize({'a' => 1, 'b' => 0})).to eq({'a' => true, 'b' => false})
+      end
+    end
+  end
+
+  if Model.connection.server_version.to_f > 24.6
+    context 'json' do
+      let!(:json_model) do
+        Class.new(ActiveRecord::Base) do
+          self.table_name = 'json_test_table'
+        end
+      end
+
+      before do
+        # Create table with JSON column
+        json_model.connection.execute('DROP TABLE IF EXISTS json_test_table')
+        json_model.connection.execute(<<~SQL, nil, settings: { allow_experimental_json_type: 1 })
+          CREATE TABLE json_test_table (
+            id UInt64,
+            properties JSON,
+            metadata JSON
+          ) ENGINE = MergeTree ORDER BY id
+        SQL
+      end
+
+      after do
+        json_model.connection.execute('DROP TABLE IF EXISTS json_test_table')
+      end
+
+      describe 'JSON column type recognition' do
+        it 'recognizes JSON columns with correct type' do
+          columns = json_model.columns_hash
+          expect(columns['properties'].type).to eq(:json)
+          expect(columns['properties'].sql_type).to eq('JSON')
+          expect(columns['metadata'].type).to eq(:json)
+        end
+
+        it 'validates JSON type in connection' do
+          connection = json_model.connection
+          expect(connection.valid_type?(:json)).to be_truthy
+          expect(connection.native_database_types[:json]).to eq({ name: 'JSON' })
+        end
+      end
+
+      describe 'JSON data operations' do
+        it 'creates record with JSON data' do
+          test_data = { 'key' => 'value', 'nested' => { 'count' => '42' } }
+          metadata = { 'version' => '1.0', 'tags' => ['test', 'json'] }
+
+          expect {
+            json_model.create!(
+              id: 1,
+              properties: test_data,
+              metadata: metadata
+            )
+          }.to change { json_model.count }.by(1)
+
+          record = json_model.first
+          expect(record.properties).to eq(test_data)
+          expect(record.metadata).to eq(metadata)
+        end
+
+        it 'handles empty JSON values' do
+          expect {
+            json_model.create!(
+              id: 2,
+              properties: {},
+              metadata: { 'status' => 'empty' }
+            )
+          }.to change { json_model.count }.by(1)
+
+          record = json_model.first
+          expect(record.properties).to eq({})
+          expect(record.metadata).to eq({ 'status' => 'empty' })
+        end
+
+        it 'handles complex JSON structures' do
+          # Note: In ClickHouse JSON type, numbers are stored as strings
+          complex_json = {
+            'user' => {
+              'name' => 'John Doe',
+              'preferences' => {
+                'theme' => 'dark',
+                'notifications' => true,
+                'languages' => ['en', 'es']
+              }
+            },
+            'timestamps' => {
+              'created_at' => '2023-01-01T00:00:00Z',
+              'updated_at' => '2023-12-31T23:59:59Z'
+            },
+            'metrics' => ['1', '2', '3', '4', '5'],  # Numbers become strings in ClickHouse JSON
+            'active' => true,
+            'score' => 0.955e2  # ClickHouse JSON representation
+          }
+
+          json_model.create!(
+            id: 3,
+            properties: complex_json,
+            metadata: { 'type' => 'complex' }
+          )
+
+          record = json_model.first
+          expect(record.properties['user']['name']).to eq('John Doe')
+          expect(record.properties['metrics']).to eq(['1', '2', '3', '4', '5'])
+          expect(record.properties['active']).to be_truthy
+          expect(record.properties['score']).to be_a(Numeric)
+        end
+
+        it 'works with insert_all' do
+          records = [
+            { id: 4, properties: { 'batch' => '1' }, metadata: { 'source' => 'batch' } },
+            { id: 5, properties: { 'batch' => '2' }, metadata: { 'source' => 'batch' } }
+          ]
+
+          expect {
+            json_model.insert_all(records)
+          }.to change { json_model.count }.by(2)
+
+          first_record = json_model.find_by(id: 4)
+          second_record = json_model.find_by(id: 5)
+
+          expect(first_record.properties).to eq({ 'batch' => '1' })
+          expect(second_record.properties).to eq({ 'batch' => '2' })
+          expect(first_record.metadata).to eq({ 'source' => 'batch' })
+        end
+      end
+
+      describe 'migration and schema dumping' do
+        it 'allows creating tables with JSON columns via migration' do
+          # Create a temporary migration-style table
+          json_model.connection.execute('DROP TABLE IF EXISTS migration_json_test')
+
+          expect {
+            json_model.connection.create_table :migration_json_test, id: false,
+                                              options: 'MergeTree ORDER BY id',
+                                              request_settings: { allow_experimental_json_type: 1 } do |t|
+              t.column :id, :integer, null: false
+              t.json :config, null: false
+              t.json :optional_data, null: false  # JSON columns cannot be nullable in ClickHouse
+            end
+          }.not_to raise_error
+
+          # Verify the table was created with correct column types
+          columns = json_model.connection.columns('migration_json_test')
+          config_column = columns.find { |c| c.name == 'config' }
+          optional_column = columns.find { |c| c.name == 'optional_data' }
+
+          expect(config_column.type).to eq(:json)
+          expect(config_column.sql_type).to eq('JSON')
+          expect(optional_column.type).to eq(:json)
+
+          json_model.connection.execute('DROP TABLE IF EXISTS migration_json_test')
+        end
+      end
     end
   end
 
