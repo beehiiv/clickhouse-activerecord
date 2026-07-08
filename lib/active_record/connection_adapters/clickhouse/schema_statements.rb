@@ -306,8 +306,13 @@ module ActiveRecord
           retries = 2
           begin
             response = request(statement, settings: settings, except_params: except_params)
-          rescue EOFError, Errno::ECONNRESET
+          rescue EOFError, Errno::ECONNRESET, Net::HTTPBadResponse
+            # Net::HTTPBadResponse means the keep-alive socket was left with
+            # unread bytes from an aborted previous response (e.g. a timeout
+            # raised mid-body-read); Net::HTTP has already closed the socket by
+            # the time it raises, so retrying transparently reconnects.
             retry if (retries -= 1) > 0 # rubocop:disable Style/NumericPredicate
+            raise
           end
           statement.processed_response(response)
         end
