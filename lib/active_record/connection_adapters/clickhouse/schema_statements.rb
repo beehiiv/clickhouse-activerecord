@@ -12,6 +12,20 @@ module ActiveRecord
         HTTP_AUTH_X_HEADERS = :x_clickhouse_headers
         HTTP_AUTH_TYPES = [HTTP_AUTH_QUERY_PARAMS, HTTP_AUTH_BASIC, HTTP_AUTH_X_HEADERS].freeze
 
+        # Rails calls #write_query? via #check_if_write_query for every statement
+        # when write prevention is enabled (e.g. connected_to(role: :reading));
+        # the AbstractAdapter default raises NotImplementedError. Classify reads
+        # the same way the built-in adapters do (SELECT/WITH/SHOW/DESCRIBE/etc.).
+        READ_QUERY = ActiveRecord::ConnectionAdapters::AbstractAdapter.build_read_query_regexp(
+          :describe, :exists, :show
+        ).freeze
+
+        def write_query?(sql)
+          !READ_QUERY.match?(sql)
+        rescue ArgumentError # Invalid encoding
+          !READ_QUERY.match?(sql.b)
+        end
+
         def with_settings(**settings)
           @block_settings ||= {}
           prev_settings = @block_settings
@@ -306,8 +320,13 @@ module ActiveRecord
           retries = 2
           begin
             response = request(statement, settings: settings, except_params: except_params)
-          rescue EOFError, Errno::ECONNRESET
+          rescue EOFError, Errno::ECONNRESET, Net::HTTPBadResponse
+            # Net::HTTPBadResponse means the keep-alive socket was left with
+            # unread bytes from an aborted previous response (e.g. a timeout
+            # raised mid-body-read); Net::HTTP has already closed the socket by
+            # the time it raises, so retrying transparently reconnects.
             retry if (retries -= 1) > 0 # rubocop:disable Style/NumericPredicate
+            raise
           end
           statement.processed_response(response)
         end
