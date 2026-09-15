@@ -1,8 +1,7 @@
 # frozen_string_literal: true
 
-# ClickHouse reports what a statement read and wrote in the X-ClickHouse-Summary response header.
-# processed_response returns only the response body, so the header was previously readable
-# only inside exec_delete.
+# processed_response returns only the response body, so X-ClickHouse-Summary was previously
+# readable only inside exec_delete.
 RSpec.describe 'ActiveRecord::ConnectionAdapters::Clickhouse::SchemaStatements#last_summary' do
   let(:connection) { ActiveRecord::Base.connection }
 

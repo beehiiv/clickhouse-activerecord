@@ -66,9 +66,7 @@ module ActiveRecord
           end
         end
 
-        # What ClickHouse reported for the most recent statement on this thread: rows and bytes read and written,
-        # from the X-ClickHouse-Summary response header. `processed_response` returns only the response body, so
-        # without this the header is discarded. Read it immediately after the statement it belongs to.
+        # Rows and bytes the most recent statement on this thread read and wrote, from X-ClickHouse-Summary.
         def last_summary
           Thread.current[last_summary_key]
         end
@@ -369,7 +367,6 @@ module ActiveRecord
           @last_summary_key ||= :"clickhouse_last_summary_#{object_id}"
         end
 
-        # A statement that reports no summary clears the previous one rather than leaving it to be misread as its own.
         def record_summary(response)
           Thread.current[last_summary_key] = JSON.parse(response.header['x-clickhouse-summary'].to_s)
         rescue JSON::ParserError
