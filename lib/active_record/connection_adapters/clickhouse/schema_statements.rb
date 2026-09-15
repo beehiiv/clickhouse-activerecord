@@ -66,6 +66,13 @@ module ActiveRecord
           end
         end
 
+        # What ClickHouse reported for the most recent statement on this thread: rows and bytes read and written,
+        # from the X-ClickHouse-Summary response header. `processed_response` returns only the response body, so
+        # without this the header is discarded. Read it immediately after the statement it belongs to.
+        def last_summary
+          Thread.current[last_summary_key]
+        end
+
         def execute_batch(statements, name = nil, **kwargs)
           statements.each do |statement|
             execute(statement, name, **kwargs)
@@ -128,13 +135,8 @@ module ActiveRecord
         def exec_delete(sql, name = nil, _binds = [])
           log(sql, "#{adapter_name} #{name}") do
             statement = Statement.new(sql, format: response_format)
-            res = request(statement)
-            begin
-              data = JSON.parse(res.header['x-clickhouse-summary'])
-              data['result_rows'].to_i
-            rescue JSON::ParserError
-              0
-            end
+            record_summary(request(statement))
+            last_summary&.fetch('result_rows', 0).to_i
           end
         end
 
@@ -328,6 +330,7 @@ module ActiveRecord
             retry if (retries -= 1) > 0 # rubocop:disable Style/NumericPredicate
             raise
           end
+          record_summary(response)
           statement.processed_response(response)
         end
 
@@ -360,6 +363,17 @@ module ActiveRecord
         def response_format_stack
           key = (@response_format_stack_key ||= :"clickhouse_response_format_stack_#{object_id}")
           Thread.current[key] ||= []
+        end
+
+        def last_summary_key
+          @last_summary_key ||= :"clickhouse_last_summary_#{object_id}"
+        end
+
+        # A statement that reports no summary clears the previous one rather than leaving it to be misread as its own.
+        def record_summary(response)
+          Thread.current[last_summary_key] = JSON.parse(response.header['x-clickhouse-summary'].to_s)
+        rescue JSON::ParserError
+          Thread.current[last_summary_key] = nil
         end
 
         def settings_params(settings = {}, except: [])
