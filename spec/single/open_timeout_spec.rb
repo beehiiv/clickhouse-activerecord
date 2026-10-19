@@ -38,4 +38,12 @@ RSpec.describe 'open_timeout configuration' do
     expect(kwargs).to include(use_ssl: false)
     expect(kwargs).not_to have_key(:open_timeout)
   end
+
+  # Callers rescue ActiveRecord errors to fall back, so a connect timeout has to arrive as one.
+  it "raises ConnectionNotEstablished when the connect times out" do
+    allow(Net::HTTP).to receive(:start).and_raise(Net::OpenTimeout, "execution expired")
+    config = { host: "localhost", port: 8123, database: "db", open_timeout: 1 }
+
+    expect { ActiveRecord::Base.clickhouse_connection(config) }.to raise_error(ActiveRecord::ConnectionNotEstablished, /execution expired/)
+  end
 end

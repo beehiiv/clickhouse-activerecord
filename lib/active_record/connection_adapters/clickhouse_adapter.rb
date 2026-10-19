@@ -642,6 +642,10 @@ module ActiveRecord
         @connection.keep_alive_timeout = @connection_parameters[:keep_alive_timeout] || 10
 
         @connection
+      # Raised as the error Rails expects from a failed connect, so callers that rescue
+      # ActiveRecord errors can fall back instead of failing the request.
+      rescue Net::OpenTimeout => e
+        raise ActiveRecord::ConnectionNotEstablished, e.message
       end
 
       def reconnect
