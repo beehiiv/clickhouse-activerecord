@@ -151,6 +151,7 @@ module ActiveRecord
             port: port,
             ssl: @config[:ssl].present? ? @config[:ssl] : port == 443,
             sslca: @config[:sslca],
+            open_timeout: @config[:open_timeout],
             read_timeout: @config[:read_timeout],
             write_timeout: @config[:write_timeout],
             keep_alive_timeout: @config[:keep_alive_timeout]
@@ -236,6 +237,7 @@ module ActiveRecord
               case key
               when 'ssl'                then config[:ssl]                = (value == 'true')
               when 'debug'              then config[:debug]              = (value == 'true')
+              when 'open_timeout'       then config[:open_timeout]       = value.to_i
               when 'read_timeout'       then config[:read_timeout]       = value.to_i
               when 'write_timeout'      then config[:write_timeout]      = value.to_i
               when 'keep_alive_timeout' then config[:keep_alive_timeout] = value.to_i
@@ -626,7 +628,11 @@ module ActiveRecord
       private
 
       def connect
-        @connection = @connection_parameters[:connection] || Net::HTTP.start(@connection_parameters[:host], @connection_parameters[:port], use_ssl: @connection_parameters[:ssl], verify_mode: OpenSSL::SSL::VERIFY_NONE)
+        # open_timeout has to reach Net::HTTP.start: it bounds the TCP connect and TLS handshake, which
+        # happen inside start, before any timeout set on the returned connection applies.
+        start_options = { use_ssl: @connection_parameters[:ssl], verify_mode: OpenSSL::SSL::VERIFY_NONE }
+        start_options[:open_timeout] = @connection_parameters[:open_timeout] if @connection_parameters[:open_timeout]
+        @connection = @connection_parameters[:connection] || Net::HTTP.start(@connection_parameters[:host], @connection_parameters[:port], **start_options)
 
         @connection.ca_file = @connection_parameters[:ca_file] if @connection_parameters[:ca_file]
         @connection.read_timeout = @connection_parameters[:read_timeout] if @connection_parameters[:read_timeout]
@@ -636,6 +642,10 @@ module ActiveRecord
         @connection.keep_alive_timeout = @connection_parameters[:keep_alive_timeout] || 10
 
         @connection
+      # Raised as the error Rails expects from a failed connect, so callers that rescue
+      # ActiveRecord errors can fall back instead of failing the request.
+      rescue Net::OpenTimeout => e
+        raise ActiveRecord::ConnectionNotEstablished, e.message
       end
 
       def reconnect
