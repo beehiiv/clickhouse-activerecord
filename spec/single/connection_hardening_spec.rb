@@ -115,7 +115,8 @@ RSpec.describe 'Connection hardening' do
         allow(http_connection).to receive(:post).and_raise(EOFError)
 
         expect { adapter.exec_query('SELECT 1') }.to raise_error(ActiveRecord::ConnectionFailed)
-        expect(http_connection).to have_received(:post).twice
+        # The fork's raw_execute also retries EOFError once, inside each of these two attempts.
+        expect(http_connection).to have_received(:post).exactly(4).times
       end
     end
 
