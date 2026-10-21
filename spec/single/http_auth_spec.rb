@@ -6,7 +6,7 @@ require 'uri'
 RSpec.describe 'HTTP auth modes' do
   let(:http_connection) { instance_double(Net::HTTP) }
   let(:response_body) { '' }
-  let(:response) { instance_double(Net::HTTPResponse, code: '200', body: response_body) }
+  let(:response) { instance_double(Net::HTTPResponse, code: '200', body: response_body, header: {}) }
   let(:base_config) do
     {
       adapter: 'clickhouse',
@@ -146,7 +146,7 @@ RSpec.describe 'HTTP auth modes' do
         expect(query_params(path)).to_not have_key('user')
         expect(query_params(path)).to_not have_key('password')
         expect(headers['Authorization']).to eq("Basic #{Base64.strict_encode64("#{config[:username]}:#{config[:password]}")}")
-        instance_double(Net::HTTPResponse, code: '200',
+        instance_double(Net::HTTPResponse, code: '200', header: {},
                                            body: json_compact_each_row(names: ['name'], types: ['String'], rows: [['events']]))
       end
 
